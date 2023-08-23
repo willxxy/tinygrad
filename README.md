@@ -1,19 +1,19 @@
 <div align="center">
 
-[![logo](https://raw.githubusercontent.com/geohot/tinygrad/master/docs/logo.png)](https://tinygrad.org)
+[![logo](https://raw.githubusercontent.com/tinygrad/tinygrad/master/docs/logo.png)](https://tinygrad.org)
 
 tinygrad: For something between [PyTorch](https://github.com/pytorch/pytorch) and [karpathy/micrograd](https://github.com/karpathy/micrograd). Maintained by [tiny corp](https://tinygrad.org).
 
 <h3>
 
-[Homepage](https://github.com/geohot/tinygrad) | [Documentation](/docs) | [Examples](/examples) | [Showcase](/docs/showcase.md) | [Discord](https://discord.gg/ZjZadyC7PK)
+[Homepage](https://github.com/tinygrad/tinygrad) | [Documentation](/docs) | [Examples](/examples) | [Showcase](/docs/showcase.md) | [Discord](https://discord.gg/ZjZadyC7PK)
 
 </h3>
 
-[![GitHub Repo stars](https://img.shields.io/github/stars/geohot/tinygrad)](https://github.com/geohot/tinygrad/stargazers)
-[![Unit Tests](https://github.com/geohot/tinygrad/actions/workflows/test.yml/badge.svg)](https://github.com/geohot/tinygrad/actions/workflows/test.yml)
+[![GitHub Repo stars](https://img.shields.io/github/stars/tinygrad/tinygrad)](https://github.com/tinygrad/tinygrad/stargazers)
+[![Unit Tests](https://github.com/tinygrad/tinygrad/actions/workflows/test.yml/badge.svg)](https://github.com/tinygrad/tinygrad/actions/workflows/test.yml)
 [![Discord](https://img.shields.io/discord/1068976834382925865)](https://discord.gg/ZjZadyC7PK)
-[![Lines of code](https://img.shields.io/tokei/lines/github/geohot/tinygrad)](https://github.com/geohot/tinygrad)
+[![Lines of code](https://img.shields.io/tokei/lines/github/tinygrad/tinygrad)](https://github.com/tinygrad/tinygrad)
 
 </div>
 
@@ -79,14 +79,16 @@ optim.step()
 
 tinygrad already supports numerous accelerators, including:
 
-- [x] CPU
-- [x] GPU (OpenCL)
-- [x] C Code (Clang)
-- [x] LLVM
-- [x] METAL
-- [x] CUDA
-- [x] Triton
-- [x] PyTorch
+- [x] [CPU](tinygrad/runtime/ops_cpu.py)
+- [x] [GPU (OpenCL)](tinygrad/runtime/ops_gpu.py)
+- [x] [C Code (Clang)](tinygrad/runtime/ops_clang.py)
+- [x] [LLVM](tinygrad/runtime/ops_llvm.py)
+- [x] [METAL](tinygrad/runtime/ops_metal.py)
+- [x] [CUDA](tinygrad/runtime/ops_cuda.py)
+- [x] [Triton](extra/accel/triton/ops_triton.py)
+- [x] [PyTorch](tinygrad/runtime/ops_torch.py)
+- [x] [HIP](tinygrad/runtime/ops_hip.py)
+- [x] [WebGPU](tinygrad/runtime/ops_webgpu.py)
 
 And it is easy to add more! Your accelerator of choice only needs to support a total of 26 (optionally 27) low level ops.
 More information can be found in the [documentation for adding new accelerators](/docs/adding_new_accelerators.md).
@@ -98,7 +100,7 @@ The current recommended way to install tinygrad is from source.
 ### From source
 
 ```sh
-git clone https://github.com/geohot/tinygrad.git
+git clone https://github.com/tinygrad/tinygrad.git
 cd tinygrad
 python3 -m pip install -e .
 ```
@@ -139,9 +141,9 @@ print(y.grad.numpy())  # dz/dy
 
 There has been a lot of interest in tinygrad lately. Here are some basic guidelines for contributing:
 
-- Bug fixes are the best and always welcome! Like [this one](https://github.com/geohot/tinygrad/pull/421/files).
+- Bug fixes are the best and always welcome! Like [this one](https://github.com/tinygrad/tinygrad/pull/421/files).
 - If you don't understand the code you are changing, don't change it!
-- All code golf PRs will be closed, but [conceptual cleanups](https://github.com/geohot/tinygrad/pull/372/files) are great.
+- All code golf PRs will be closed, but [conceptual cleanups](https://github.com/tinygrad/tinygrad/pull/372/files) are great.
 - Features are welcome. Though if you are adding a feature, you need to include tests.
 - Improving test coverage is great, with reliable non-brittle tests.
 

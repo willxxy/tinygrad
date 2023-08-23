@@ -3,11 +3,11 @@ import time
 from multiprocessing import Process, Queue
 import numpy as np
 from tqdm import trange
-from tinygrad.state import get_parameters
+from tinygrad.nn.state import get_parameters
 from tinygrad.nn import optim
 from tinygrad.helpers import getenv
 from tinygrad.tensor import Tensor
-from datasets import fetch_cifar
+from extra.datasets import fetch_cifar
 from models.efficientnet import EfficientNet
 
 class TinyConvNet:
@@ -46,7 +46,7 @@ if __name__ == "__main__":
   print(f"training with batch size {BS} for {steps} steps")
 
   if IMAGENET:
-    from datasets.imagenet import fetch_batch
+    from extra.datasets.imagenet import fetch_batch
     def loader(q):
       while 1:
         try:
@@ -89,8 +89,8 @@ if __name__ == "__main__":
     opt_time = (time.time()-st)*1000.0
 
     st = time.time()
-    loss = loss.cpu().numpy()
-    cat = np.argmax(out.cpu().numpy(), axis=1)
+    loss = loss.numpy()
+    cat = out.argmax(axis=1).numpy()
     accuracy = (cat == Y).mean()
     finish_time = (time.time()-st)*1000.0
 

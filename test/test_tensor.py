@@ -1,8 +1,6 @@
-import dataclasses
 import numpy as np
 import torch
 import unittest
-import itertools
 from tinygrad.tensor import Tensor, Device
 from tinygrad.helpers import dtypes
 from extra.gradcheck import numerical_jacobian, jacobian, gradcheck
@@ -39,7 +37,7 @@ class TestTinygrad(unittest.TestCase):
       out = out.log_softmax()
       out = out.mul(m).add(m).sum()
       out.backward()
-      return out.cpu().numpy(), x.grad.cpu().numpy(), W.grad.cpu().numpy()
+      return out.numpy(), x.grad.numpy(), W.grad.numpy()
 
     def test_pytorch():
       x = torch.tensor(x_init, requires_grad=True)
@@ -54,6 +52,7 @@ class TestTinygrad(unittest.TestCase):
     for x,y in zip(test_tinygrad(), test_pytorch()):
       np.testing.assert_allclose(x, y, atol=1e-5)
 
+  @unittest.skipIf(Device.DEFAULT == "WEBGPU", "this test uses more than 8 bufs which breaks webgpu") #TODO: remove after #1461
   def test_backward_pass_diamond_model(self):
     def test_tinygrad():
       u = Tensor(U_init, requires_grad=True)
@@ -65,7 +64,7 @@ class TestTinygrad(unittest.TestCase):
       out = out.log_softmax()
       out = out.sum()
       out.backward()
-      return out.cpu().numpy(), u.cpu().grad.numpy(), v.cpu().grad.numpy(), w.cpu().grad.numpy()
+      return out.numpy(), u.grad.numpy(), v.grad.numpy(), w.grad.numpy()
 
     def test_pytorch():
       u = torch.tensor(U_init, requires_grad=True)
@@ -101,51 +100,56 @@ class TestTinygrad(unittest.TestCase):
     Tensor.training = True
     n, rate = 1_000_000, 0.1
     w = Tensor.ones(n).dropout(rate)
-    non_zeros = np.count_nonzero(w.cpu().numpy())
+    non_zeros = np.count_nonzero(w.numpy())
     expected = n * (1 - rate)
     np.testing.assert_allclose(non_zeros, expected, rtol=2e-3)
 
-  @unittest.skip("TODO: fix")
   def test_jacobian(self):
-    W = np.random.RandomState(1337).random((10, 5))
-    x = np.random.RandomState(7331).random((1, 10)) - 0.5
+    W = np.random.RandomState(42069).random((10, 5)).astype(np.float32)
+    x = np.random.RandomState(69420).random((1, 10)).astype(np.float32)
 
     torch_x = torch.tensor(x, requires_grad=True)
     torch_W = torch.tensor(W, requires_grad=True)
     torch_func = lambda x: torch.nn.functional.log_softmax(x.matmul(torch_W).relu(), dim=1)
     PJ = torch.autograd.functional.jacobian(torch_func, torch_x).squeeze().numpy()
 
-    tiny_x = Tensor(x)
-    tiny_W = Tensor(W)
+    tiny_x = Tensor(x, requires_grad=True)
+    tiny_W = Tensor(W, requires_grad=True)
     tiny_func = lambda x: x.dot(tiny_W).relu().log_softmax()
     J = jacobian(tiny_func, tiny_x)
     NJ = numerical_jacobian(tiny_func, tiny_x)
 
     np.testing.assert_allclose(PJ, J, atol = 1e-5)
-    np.testing.assert_allclose(PJ, NJ, atol = 1e-5)
+    np.testing.assert_allclose(PJ, NJ, atol = 1e-3)
 
-  @unittest.skip("TODO: fix")
   def test_gradcheck(self):
-    W = np.random.RandomState(1337).random((10, 5))
-    x = np.random.RandomState(7331).random((1, 10)) - 0.5
+    W = np.random.RandomState(1337).random((10, 5)).astype(np.float32)
+    x = np.random.RandomState(7331).random((1, 10)).astype(np.float32)
 
-    tiny_x = Tensor(x)
-    tiny_W = Tensor(W)
+    tiny_x = Tensor(x, requires_grad=True)
+    tiny_W = Tensor(W, requires_grad=True)
     tiny_func = lambda x: x.dot(tiny_W).relu().log_softmax()
 
-    self.assertTrue(gradcheck(tiny_func, tiny_x))
+    self.assertTrue(gradcheck(tiny_func, tiny_x, eps = 1e-3))
 
     # coarse approx. since a "big" eps and the non-linearities of the model
-    self.assertFalse(gradcheck(tiny_func, tiny_x, eps = 0.1))
+    self.assertFalse(gradcheck(tiny_func, tiny_x, eps = 1e-5))
 
   def test_random_fns_are_deterministic_with_seed(self):
-    for random_fn in [Tensor.randn, Tensor.uniform, Tensor.scaled_uniform, Tensor.glorot_uniform]:
+    for random_fn in [Tensor.randn, Tensor.normal, Tensor.uniform, Tensor.scaled_uniform, Tensor.glorot_uniform, Tensor.kaiming_normal]:
       with self.subTest(msg=f"Tensor.{random_fn.__name__}"):
         Tensor.manual_seed(1337)
         a = random_fn(10,10).realize()
         Tensor.manual_seed(1337)
         b = random_fn(10,10).realize()
         np.testing.assert_allclose(a.numpy(), b.numpy())
+
+  def test_randn_isnt_inf_on_zero(self):
+    # simulate failure case of rand handing a zero to randn
+    original_rand, Tensor.rand = Tensor.rand, Tensor.zeros
+    try: self.assertNotIn(np.inf, Tensor.randn(16).numpy())
+    except: raise
+    finally: Tensor.rand = original_rand
 
   def test_zeros_like_has_same_dtype(self):
     for datatype in [dtypes.float16, dtypes.float32, dtypes.int8, dtypes.int32, dtypes.int64, dtypes.uint8]:
@@ -176,6 +180,28 @@ class TestTinygrad(unittest.TestCase):
     assert Tensor.randn(2,2,2).ndim == 3
     assert Tensor.randn(1,1,1,1,1,1).ndim == 6
 
+  def test_argfix(self):
+    self.assertEqual(Tensor.zeros().shape, ())
+    self.assertEqual(Tensor.ones().shape, ())
+
+    self.assertEqual(Tensor.zeros([]).shape, ())
+    self.assertEqual(Tensor.ones([]).shape, ())
+
+    self.assertEqual(Tensor.zeros(tuple()).shape, ())
+    self.assertEqual(Tensor.ones(tuple()).shape, ())
+
+    self.assertEqual(Tensor.zeros(1).shape, (1,))
+    self.assertEqual(Tensor.ones(1).shape, (1,))
+
+    self.assertEqual(Tensor.zeros(1,10,20).shape, (1,10,20))
+    self.assertEqual(Tensor.ones(1,10,20).shape, (1,10,20))
+
+    self.assertEqual(Tensor.zeros([1]).shape, (1,))
+    self.assertEqual(Tensor.ones([1]).shape, (1,))
+
+    self.assertEqual(Tensor.zeros([10,20,40]).shape, (10,20,40))
+    self.assertEqual(Tensor.ones([10,20,40]).shape, (10,20,40))
+
   def test_numel(self):
     assert Tensor.randn(10, 10).numel() == 100
     assert Tensor.randn(1,2,5).numel() == 10
@@ -186,6 +212,13 @@ class TestTinygrad(unittest.TestCase):
   def test_element_size(self):
     for _, dtype in dtypes.fields().items():
       assert dtype.itemsize == Tensor.randn(3, dtype=dtype).element_size(), f"Tensor.element_size() not matching Tensor.dtype.itemsize for {dtype}"
+
+  def test_deepwalk_ctx_check(self):
+    layer = Tensor.uniform(1, 1, requires_grad=True)
+    x = Tensor.randn(1, 1, 1)
+    x.dot(layer).mean().backward()
+    x = Tensor.randn(1, 1, 1)
+    x.dot(layer).mean().backward()
 
 if __name__ == '__main__':
   unittest.main()

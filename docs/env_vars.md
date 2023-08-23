@@ -5,11 +5,26 @@ Most of these are self-explanatory, and are usually used to set an option at run
 
 Example: `GPU=1 DEBUG=4 python3 -m pytest`
 
-The columns are: Variable, Possible Value(s) and Description.
+However you can also decorate a function to set a value only inside that function.
 
-- A `#` means that the variable can take any integer value.
+```python
+# in tensor.py (probably only useful if you are a tinygrad developer)
+@Context(DEBUG=4)
+def numpy(self) -> ...
+```
+
+Or use contextmanager to temporarily set a value inside some scope:
+
+```python
+with Context(DEBUG=0):
+  a = Tensor.ones(10, 10)
+  a *= 2
+```
 
 ## Global Variables
+The columns of this list are are: Variable, Possible Value(s) and Description.
+
+- A `#` means that the variable can take any integer value.
 
 These control the behavior of core tinygrad even when used as a library.
 
@@ -35,7 +50,6 @@ PRINT_PRG           | [1]        | print program code
 IMAGE               | [1]        | enable 2d specific optimizations
 FLOAT16             | [1]        | use float16 for images instead of float32
 ENABLE_METHOD_CACHE | [1]        | enable method cache (this is the default)
-EARLY_STOPPING      | [# > 0]  | stop after this many kernels
 DISALLOW_ASSIGN     | [1]        | disallow assignment of tensors
 CL_EXCLUDE          | [name0,name1] | comma-separated list of device names to exclude when using OpenCL GPU backend (like `CL_EXCLUDE=gfx1036`)
 CL_PLATFORM         | [# >= 0]   | index of the OpenCL [platform](https://documen.tician.de/pyopencl/runtime_platform.html#pyopencl.Platform) to run on. Defaults to 0.
@@ -188,7 +202,7 @@ Variable | Possible Value(s) | Description
 ---|---|---
 BS | [8, 16, 32, 64, 128] | batch size to use
 
-### datasets/imagenet_download.py
+### extra/datasets/imagenet_download.py
 
 Variable | Possible Value(s) | Description
 ---|---|---

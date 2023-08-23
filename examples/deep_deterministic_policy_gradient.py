@@ -1,7 +1,7 @@
 from typing import Optional, Tuple
 from numpy.typing import NDArray
 
-from tinygrad.state import get_parameters
+from tinygrad.nn.state import get_parameters
 from tinygrad.tensor import Tensor
 from tinygrad.nn import optim
 from tinygrad.helpers import getenv
@@ -50,11 +50,11 @@ class Buffer:
 
     self.buffer_counter = 0
 
-    self.state_buffer = np.zeros((self.buffer_capacity, num_states))
-    self.action_buffer = np.zeros((self.buffer_capacity, num_actions))
-    self.reward_buffer = np.zeros((self.buffer_capacity, 1))
-    self.next_state_buffer = np.zeros((self.buffer_capacity, num_states))
-    self.done_buffer = np.zeros((self.buffer_capacity, 1))
+    self.state_buffer = np.zeros((self.buffer_capacity, num_states), np.float32)
+    self.action_buffer = np.zeros((self.buffer_capacity, num_actions), np.float32)
+    self.reward_buffer = np.zeros((self.buffer_capacity, 1), np.float32)
+    self.next_state_buffer = np.zeros((self.buffer_capacity, num_states), np.float32)
+    self.done_buffer = np.zeros((self.buffer_capacity, 1), np.float32)
 
   def record(
     self, observations: Tuple[Tensor, NDArray, float, NDArray, bool]
@@ -114,8 +114,8 @@ class DeepDeterministicPolicyGradient:
       noise_stddev: The standard deviation of the exploration noise.
 
   Note:
-      In contrast to the original paper, actions are already included in the first layer 
-      of the Critic and we use a Gaussian distribution instead of an Ornstein Uhlenbeck 
+      In contrast to the original paper, actions are already included in the first layer
+      of the Critic and we use a Gaussian distribution instead of an Ornstein Uhlenbeck
       process for exploration noise.
 
   """
@@ -203,7 +203,7 @@ class DeepDeterministicPolicyGradient:
         next_state_batch,
         done_batch,
     ) = self.memory.sample()
- 
+
     target_actions = self.target_actor.forward(next_state_batch, self.max_action)
     y = reward_batch + self.gamma * self.target_critic.forward(
         next_state_batch, target_actions.detach()

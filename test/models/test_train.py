@@ -1,7 +1,7 @@
 import unittest
 import time
 import numpy as np
-from tinygrad.state import get_parameters
+from tinygrad.nn.state import get_parameters
 from tinygrad.nn import optim
 from tinygrad.tensor import Device
 from tinygrad.helpers import getenv
@@ -11,6 +11,9 @@ from models.efficientnet import EfficientNet
 from models.transformer import Transformer
 from models.vit import ViT
 from models.resnet import ResNet18
+import pytest
+
+pytestmark = pytest.mark.exclude_gpu
 
 BS = getenv("BS", 2)
 
@@ -46,6 +49,7 @@ class TestTrain(unittest.TestCase):
     train_one_step(model,X,Y)
     check_gc()
 
+  @unittest.skipIf(Device.DEFAULT == "WEBGPU", "too many buffers for webgpu")
   def test_vit(self):
     model = ViT()
     X = np.zeros((BS,3,224,224), dtype=np.float32)

@@ -22,7 +22,7 @@ from abc import ABC
 # let's trace an addition down through the layers of abstraction.
 
 # we will be using the clang backend
-from tinygrad.lazy import Device
+from tinygrad.ops import Device
 Device.DEFAULT = "CLANG"
 
 # first, 2+3 as a Tensor, the highest level
@@ -98,17 +98,17 @@ class LazyOp:
   src: Tuple[Union[LazyOp, LazyBuffer], ...]   # the sources
   arg: Optional[Any] = None                    # and an optional static argument
 
-# there's currently 27 Ops you have to implement for an accelerator.
-class UnaryOps(Enum):    NOOP = auto(); EXP2 = auto(); LOG2 = auto(); CAST = auto(); SIN = auto()
-class BinaryOps(Enum):   ADD = auto();  SUB = auto();  MUL = auto();  DIV = auto();  POW = auto(); CMPEQ = auto(); MAX = auto()
+# there's currently 28 Ops you have to implement for an accelerator.
+class UnaryOps(Enum):    NOOP = auto(); EXP2 = auto(); LOG2 = auto(); CAST = auto(); SIN = auto();   SQRT = auto()
+class BinaryOps(Enum):   ADD = auto();  SUB = auto();  MUL = auto();  DIV = auto();  CMPLT = auto(); MAX = auto()
 class ReduceOps(Enum):   SUM = auto();  MAX = auto()
 class MovementOps(Enum): RESHAPE = auto(); PERMUTE = auto(); EXPAND = auto(); PAD = auto(); SHRINK = auto(); STRIDE = auto()
-class FusedOps(Enum):    MULACC = auto()
+class TernaryOps(Enum):  MULACC = auto(); WHERE = auto()
 class LoadOps(Enum):     EMPTY = auto(); RAND = auto(); CONST = auto(); FROM = auto(); CONTIGUOUS = auto(); CUSTOM = auto()
 # NOTE: if you have a CompiledBuffer(DeviceBuffer)
 #       you do not need to implement the MovementOps
 #       as they are handled by the ShapeTracker(in tinygrad/shape/shapetracker.py, code 7/10)
-Op = Union[UnaryOps, BinaryOps, ReduceOps, MovementOps, FusedOps, LoadOps]
+Op = Union[UnaryOps, BinaryOps, ReduceOps, MovementOps, TernaryOps, LoadOps]
 
 # most of tinygrad/lazy.py is concerned with fusing Ops into LazyOps ASTs that map to GPUKernels
 # it's beyond the scope of this tutorial, but you can read the file if interested
@@ -131,11 +131,11 @@ assert lazyop.op == BinaryOps.ADD
 assert len(lazyop.src) == 2
 
 # the first source is the 2, it comes from the CPU
-# the source is a LazyBuffer, holding the data as an ndarray
+# the source is a LazyBuffer that is a "CPU" Tensor
 # again, a LazyOp AST is like a GPU kernel. you have to copy the data on the device first
-print(lazyop.src[0].op)
 assert lazyop.src[0].op.op == LoadOps.FROM
-assert lazyop.src[0].op.src[0].realized.toCPU()[0] == 2, "the arg of the FROM LazyOP is a LazyBuffer holding [2.]"
+assert lazyop.src[0].op.src[0].device == "CPU"
+assert lazyop.src[0].op.src[0].realized._buf[0] == 2, "the src of the FROM LazyOP is a LazyBuffer on the CPU holding [2.]"
 assert result.lazydata.realized is None, "the LazyBuffer is not realized yet"
 
 # now we realize the LazyBuffer
@@ -167,7 +167,7 @@ class Compiled:
   buffer: Type[RawBuffer]
 
   # a code generator, which compiles the AST
-  codegen: Type[ASTKernel]
+  codegen: Type[Linearizer]
 
   # and a runtime, which runs the generated code
   runtime: Type[Runtime]
@@ -217,7 +217,7 @@ from tinygrad.runtime.lib import RawMallocBuffer
 # ClangProgram is the simplest runtime (in tinygrad/runtime/ops_clang.py, code 7/10)
 # __init__ calls clang, and __call__ calls the function in the *.so outputted by clang
 # in CLANG, global_size and local_size are ignored
-from tinygrad.runtime.ops_clang import ClangProgram, ClangCodegen
+from tinygrad.runtime.ops_clang import ClangProgram
 
 # a concrete example looks like this, this adds two size 1 RawBuffer
 # first we create two numpy buffers containing 2 and 3
@@ -229,39 +229,73 @@ input_a, input_b = RawMallocBuffer.fromCPU(numpy_a), RawMallocBuffer.fromCPU(num
 output = RawMallocBuffer(1, dtypes.float32)
 
 # compile the program, run it, and 2+3 does indeed equal 5
-program = ClangProgram("add", f"{ClangCodegen.lang.kernel_prefix} void add(float *a, float *b, float *c) {{ *a = *b + *c; }}")
+program = ClangProgram("add", f"void add(float *a, float *b, float *c) {{ *a = *b + *c; }}")
 program(None, None, output, input_a, input_b)  # NOTE: the None are for global_size and local_size
 print(output.toCPU())
 assert output.toCPU()[0] == 5, "it's still 5"
 np.testing.assert_allclose(output.toCPU(), numpy_a+numpy_b)
 
 # %%
-# == ASTKernel (in tinygrad/codegen/ast.py, code 2/10) ==
+# == Linearizer (in tinygrad/codegen/linearizer.py, code 4/10) ==
 
-# but we are nowhere near done!
-# we wrote the code above by hand
-# we need the LazyOp ASTs to be automatically turned into code
-# the current class looks roughly like this, but this will change and we will update the docs
-# this stuff is in the terrible 528 lines of (tinygrad/codegen/*, code 2/10 aka turd quality)
-class ASTKernel:
+# in the above example, we wrote the code by hand
+# normally while using tinygrad you don't do that
+# the first step of transforming an AST into code is to "linearize" it, think like toposort on the AST
+# for that, we use the Linearizer, which turns an AST into a list of (linear) UOps
+
+class UOps(Enum): LOOP = auto(); DEFINE_LOCAL = auto(); LOAD = auto(); ALU = auto(); CONST = auto(); ENDLOOP = auto(); STORE = auto();
+
+class Token:
+  name: str
+
+class UOp:
+  uop: UOps
+  out: Optional[Token]
+  vin: List[Token]
+  arg: Any
+
+class Linearizer:
   # create the kernel with the AST
   # NOTE: the AST contains the CompiledBuffers themselves as the root nodes. this will change
   def __init__(self, ast:LazyOp): pass
-  def codegen(self) -> ASTRunner: pass
+  def process(self): pass
+  def linearize(self): pass
 
-# we return a class that runs code on LazyBuffers, which are all expected to be realized
-class ASTRunner:  # (from tinygrad/ops.py)
-  def __init__(self, name, prg, global_size:Optional[List[int]], local_size:Optional[List[int]]): pass
-  def build(self, runtime:Runtime): pass
-  def exec(self, bufs:List[LazyBuffer]): pass
+  # when linearize is run, it fills in this list
+  uops: List[UOp]
 
-# that hides a lot of complexity that will be refactored, but that's the basic idea of code generation
+from tinygrad.tensor import Tensor
+from tinygrad.helpers import prod
+result = Tensor(2).realize() + Tensor(3).realize()
+result.lazydata.realized = Device[Device.DEFAULT].buffer(prod(result.shape), result.dtype)
+
+# use the real Linearizer to linearize 2+3
+from tinygrad.codegen.linearizer import Linearizer, LinearizerOptions
+linearizer = Linearizer(result.lazydata.op, result.lazydata, LinearizerOptions())
+linearizer.linearize()
+
+# print the uops
+for uop in linearizer.uops: print(uop)
+
+# output:
+"""
+UOps.DEFINE_GLOBAL  :                           []                               ('data0', dtypes.float)
+UOps.LOOP           :                           []                               ([], 'global')
+UOps.LOOP           :                           []                               ([], 'local')
+UOps.LOAD           : <acc1_0>                  []                               ConstOp(value=2.0, valid=<1>, invalid_value=0.0)
+UOps.LOAD           : <acc2_0>                  []                               ConstOp(value=3.0, valid=<1>, invalid_value=0.0)
+UOps.ALU            : <alu0>                    [<acc1_0>, <acc2_0>]             BinaryOps.ADD
+UOps.STORE          :                           [<alu0>]                         MemOp(name='data0', idx=<0>, local=False, memory_dtype=dtypes.float, valid=<1>, invalid_value=0.0)
+UOps.ENDLOOP        :                           []                               ([], 'global+local')
+"""
 
 # %%
 # == Example: 2+3 autogenerated clang code ==
+# to generate clang code, the Linearizer is wrapped with CStyleCodegen
+# here, we have an example where we fetch the generated code from the JIT
 
 from tinygrad.tensor import Tensor
-result = Tensor([2]) + Tensor([3])
+result = Tensor(2) + Tensor(3)
 
 # we have a global cache used by the JIT
 # from there, we can see the generated clang code
@@ -273,7 +307,7 @@ GlobalCounters.cache = None  # disable the cache
 
 # there's one ASTRunner in the cache
 assert len(cache_saved) == 1
-prg, bufs = cache_saved[0]
+prg, bufs, _ = cache_saved[0]
 
 # print the C Program :)
 print(prg.prg)

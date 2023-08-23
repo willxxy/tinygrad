@@ -3,11 +3,11 @@ import numpy as np
 from tqdm import trange
 import torch
 from torchvision.utils import make_grid, save_image
-from tinygrad.state import get_parameters
+from tinygrad.nn.state import get_parameters
 from tinygrad.tensor import Tensor
 from tinygrad.helpers import getenv
 from tinygrad.nn import optim
-from datasets import fetch_mnist
+from extra.datasets import fetch_mnist
 
 class LinearGen:
   def __init__(self):
@@ -31,7 +31,8 @@ class LinearDisc:
     self.l4 = Tensor.scaled_uniform(256, 2)
 
   def forward(self, x):
-    x = x.dot(self.l1).leakyrelu(0.2).dropout(0.3)
+    # balance the discriminator inputs with const bias (.add(1))
+    x = x.dot(self.l1).add(1).leakyrelu(0.2).dropout(0.3)
     x = x.dot(self.l2).leakyrelu(0.2).dropout(0.3)
     x = x.dot(self.l3).leakyrelu(0.2).dropout(0.3)
     x = x.dot(self.l4).log_softmax()
@@ -39,13 +40,12 @@ class LinearDisc:
 
 def make_batch(images):
   sample = np.random.randint(0, len(images), size=(batch_size))
-  image_b = images[sample].reshape(-1, 28*28).astype(np.float32) / 255.0
-  image_b = (image_b - 0.5) / 0.5
+  image_b = images[sample].reshape(-1, 28*28).astype(np.float32) / 127.5 - 1.0
   return Tensor(image_b)
 
-def make_labels(bs, val):
+def make_labels(bs, col, val=-2.0):
   y = np.zeros((bs, 2), np.float32)
-  y[range(bs), [val] * bs] = -2.0  # Can we do label smoothin? i.e -2.0 changed to -1.98789.
+  y[range(bs), [col] * bs] = val  # Can we do label smoothing? i.e -2.0 changed to -1.98789.
   return Tensor(y)
 
 def train_discriminator(optimizer, data_real, data_fake):
@@ -59,7 +59,7 @@ def train_discriminator(optimizer, data_real, data_fake):
   loss_real.backward()
   loss_fake.backward()
   optimizer.step()
-  return (loss_real + loss_fake).cpu().numpy()
+  return (loss_real + loss_fake).numpy()
 
 def train_generator(optimizer, data_fake):
   real_labels = make_labels(batch_size, 1)
@@ -68,7 +68,7 @@ def train_generator(optimizer, data_fake):
   loss = (output * real_labels).mean()
   loss.backward()
   optimizer.step()
-  return loss.cpu().numpy()
+  return loss.numpy()
 
 if __name__ == "__main__":
   # data for training and validation
@@ -100,7 +100,7 @@ if __name__ == "__main__":
       data_fake = generator.forward(noise)
       loss_g += train_generator(optim_g, data_fake)
     if (epoch + 1) % sample_interval == 0:
-      fake_images = generator.forward(ds_noise).detach().cpu().numpy()
+      fake_images = generator.forward(ds_noise).detach().numpy()
       fake_images = (fake_images.reshape(-1, 1, 28, 28) + 1) / 2  # 0 - 1 range.
       save_image(make_grid(torch.tensor(fake_images)), output_dir / f"image_{epoch+1}.jpg")
     t.set_description(f"Generator loss: {loss_g/n_steps}, Discriminator loss: {loss_d/n_steps}")
