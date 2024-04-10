@@ -2,12 +2,12 @@
 import gc
 import time
 from tqdm import trange
-from models.efficientnet import EfficientNet
+from extra.models.efficientnet import EfficientNet
 from tinygrad.nn.state import get_parameters
 from tinygrad.nn import optim
-from tinygrad.tensor import Tensor
-from tinygrad.ops import GlobalCounters
+from tinygrad import Tensor, GlobalCounters
 from tinygrad.helpers import getenv
+from tinygrad.engine.jit import CacheCollector
 
 def tensors_allocated():
   return sum(isinstance(x, Tensor) for x in gc.get_objects())
@@ -41,7 +41,7 @@ if __name__ == "__main__":
       st = time.monotonic()
       out = model.forward(x_train)
       loss = out.log_softmax().mul(y_train).mean()
-      if i == 2 and CLCACHE: GlobalCounters.cache = []
+      if i == 2 and CLCACHE: CacheCollector.start()
       if BACKWARD:
         optimizer.zero_grad()
         loss.backward()
@@ -57,8 +57,7 @@ if __name__ == "__main__":
       et = time.monotonic()
 
     if i == 2 and CLCACHE:
-      cl_cache = GlobalCounters.cache
-      GlobalCounters.cache = None
+      cl_cache = CacheCollector.finish()
 
     mem_used = GlobalCounters.mem_used
     loss_cpu = loss.detach().numpy()

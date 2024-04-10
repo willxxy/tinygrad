@@ -55,7 +55,7 @@ There are even more of these factory methods, you can find them in the [tensor.p
 All the tensors creation methods can take a `dtype` argument to specify the data type of the tensor.
 
 ```python
-from tinygrad.helpers import dtypes
+from tinygrad.dtype import dtypes
 
 t3 = Tensor([1, 2, 3, 4, 5], dtype=dtypes.int32)
 ```
@@ -76,7 +76,7 @@ print(t6.numpy())
 ```
 
 There are a lot more operations that can be performed on tensors, you can find them in the [tensor.py](/tinygrad/tensor.py) file.
-Additionally reading through [abstractions.py](/docs/abstractions.py) will help you understand how operations on these tensors make their way down to your hardware.
+Additionally reading through [abstractions2.py](/docs/abstractions2.py) will help you understand how operations on these tensors make their way down to your hardware.
 
 ## Models
 
@@ -87,7 +87,6 @@ These classes do not need to inherit from any base class, in fact if they don't 
 An example of this would be the `nn.Linear` class which represents a linear layer in a neural network.
 
 ```python
-# from tinygrad.nn import Linear
 class Linear:
   def __init__(self, in_features, out_features, bias=True, initialization: str='kaiming_uniform'):
     self.weight = getattr(Tensor, initialization)(out_features, in_features)
@@ -104,8 +103,6 @@ Our classifier will be a simple 2 layer neural network with a Leaky ReLU activat
 It will use a hidden layer size of 128 and an output layer size of 10 (one for each digit) with no bias on either Linear layer.
 
 ```python
-from tinygrad.nn import Linear
-
 class TinyNet:
   def __init__(self):
     self.l1 = Linear(784, 128, bias=False)
@@ -131,29 +128,19 @@ Training neural networks in tinygrad is super simple.
 All we need to do is define our neural network, define our loss function, and then call `.backward()` on the loss function to compute the gradients.
 They can then be used to update the parameters of our neural network using one of the many optimizers in [optim.py](/tinygrad/nn/optim.py).
 
-First we need to set the training flag in `Tensor`:
+For our loss function we will be using sparse categorical cross entropy loss. The implementation below is taken from [tensor.py](/tinygrad/tensor.py), it's copied below to highlight an important detail of tinygrad.
 
 ```python
-Tensor.training = True
+def sparse_categorical_crossentropy(self, Y, ignore_index=-1) -> Tensor:
+    loss_mask = Y != ignore_index
+    y_counter = Tensor.arange(self.shape[-1], dtype=dtypes.int32, requires_grad=False, device=self.device).unsqueeze(0).expand(Y.numel(), self.shape[-1])
+    y = ((y_counter == Y.flatten().reshape(-1, 1)).where(-1.0, 0) * loss_mask.reshape(-1, 1)).reshape(*Y.shape, self.shape[-1])
+    return self.log_softmax().mul(y).sum() / loss_mask.sum()
 ```
 
-For our loss function we will be using sparse categorical cross entropy loss.
-
-```python
-# from tinygrad.tensor import sparse_categorical_crossentropy
-def sparse_categorical_crossentropy(out, Y, ignore_index=-1):
-  loss_mask = Y != ignore_index
-  num_classes = out.shape[-1]
-  y_counter = Tensor.arange(num_classes, requires_grad=False).unsqueeze(0).expand(Y.numel(), num_classes)
-  y = (y_counter == Y.flatten().reshape(-1, 1)).where(-1.0, 0)
-  y = y * loss_mask.reshape(-1, 1)
-  y = y.reshape(*Y.shape, num_classes)
-  return out.log_softmax().mul(y).sum() / loss_mask.sum()
-```
-
-As we can see in this implementation of cross entropy loss, there are certain operations that tinygrad does not support.
-Namely, operations that are load/store like indexing a tensor with another tensor or assigning a value to a tensor at a certain index.
-Load/store ops are not supported in tinygrad because they add complexity when trying to port to different backends and 90% of the models out there don't use/need them.
+As we can see in this implementation of cross entropy loss, there are certain operations that tinygrad does not support natively.
+Namely, operations that are load/store or assigning a value to a tensor at a certain index.
+Load/store ops are not supported in tinygrad natively because they add complexity when trying to port to different backends, 90% of the models out there don't use/need them, and they can be implemented like it's done above with an `arange` mask.
 
 For our optimizer we will be using the traditional stochastic gradient descent optimizer with a learning rate of 3e-4.
 
@@ -179,37 +166,41 @@ from extra.datasets import fetch_mnist
 Now we have everything we need to start training our neural network.
 We will be training for 1000 steps with a batch size of 64.
 
+We use `with Tensor.train()` set the internal flag `Tensor.training` to `True` during training.
+Upon exit, the flag is restored to its previous value by the context manager.
+
 ```python
 X_train, Y_train, X_test, Y_test = fetch_mnist()
 
-for step in range(1000):
-  # random sample a batch
-  samp = np.random.randint(0, X_train.shape[0], size=(64))
-  batch = Tensor(X_train[samp], requires_grad=False)
-  # get the corresponding labels
-  labels = Tensor(Y_train[samp])
+with Tensor.train():
+  for step in range(1000):
+    # random sample a batch
+    samp = np.random.randint(0, X_train.shape[0], size=(64))
+    batch = Tensor(X_train[samp], requires_grad=False)
+    # get the corresponding labels
+    labels = Tensor(Y_train[samp])
 
-  # forward pass
-  out = net(batch)
+    # forward pass
+    out = net(batch)
 
-  # compute loss
-  loss = sparse_categorical_crossentropy(out, labels)
+    # compute loss
+    loss = sparse_categorical_crossentropy(out, labels)
 
-  # zero gradients
-  opt.zero_grad()
+    # zero gradients
+    opt.zero_grad()
 
-  # backward pass
-  loss.backward()
+    # backward pass
+    loss.backward()
 
-  # update parameters
-  opt.step()
+    # update parameters
+    opt.step()
 
-  # calculate accuracy
-  pred = out.argmax(axis=-1).numpy()
-  acc = (pred == labels).mean()
+    # calculate accuracy
+    pred = out.argmax(axis=-1)
+    acc = (pred == labels).mean()
 
-  if step % 100 == 0:
-    print(f"Step {step+1} | Loss: {loss.numpy()} | Accuracy: {acc}")
+    if step % 100 == 0:
+      print(f"Step {step+1} | Loss: {loss.numpy()} | Accuracy: {acc.numpy()}")
 ```
 
 ## Evaluation
@@ -218,9 +209,6 @@ Now that we have trained our neural network we can evaluate it on the test set.
 We will be using the same batch size of 64 and will be evaluating for 1000 of those batches.
 
 ```python
-# set training flag to false
-Tensor.training = False
-
 with Timing("Time: "):
   avg_acc = 0
   for step in range(1000):
@@ -244,7 +232,7 @@ with Timing("Time: "):
 Highly recommend you check out the [examples/](/examples) folder for more examples of using tinygrad.
 Reading the source code of tinygrad is also a great way to learn how it works.
 Specifically the tests in [test/](/test) are a great place to see how to use and the semantics of the different operations.
-There are also a bunch of models implemented in [models/](/models) that you can use as a reference.
+There are also a bunch of models implemented in [models/](/extra/models) that you can use as a reference.
 
 Additionally, feel free to ask questions in the `#learn-tinygrad` channel on the [discord](https://discord.gg/beYbxwxVdx). Don't ask to ask, just ask!
 
@@ -259,7 +247,7 @@ To use the JIT we just need to add a function decorator to the forward pass of o
 Or in this case we will create a wrapper function and decorate the wrapper function to speed up the evaluation of our neural network.
 
 ```python
-from tinygrad.jit import TinyJit
+from tinygrad import TinyJit
 
 @TinyJit
 def jit(x):
