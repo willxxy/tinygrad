@@ -1,6 +1,7 @@
 import unittest
 from extra.export_model import export_model, EXPORT_SUPPORTED_DEVICE
 from tinygrad.tensor import Tensor, Device
+from tinygrad import dtypes
 import json
 
 class MockMultiInputModel:
@@ -31,9 +32,9 @@ class TextModelExport(unittest.TestCase):
 
   def test_multi_output_model_export(self):
     model = MockMultiOutputModel()
-    input = Tensor.rand(2,2)
-    outputs = model(input)
-    prg, _, out_sizes, _ = export_model(model, "", input)
+    input_tensor = Tensor.rand(2,2)
+    outputs = model(input_tensor)
+    prg, _, out_sizes, _ = export_model(model, "", input_tensor)
     prg = json.loads(prg)
 
     assert len(outputs) == len(prg["outputs"]) == len(out_sizes), f"Model and exported outputs don't match: mdl={len(outputs)}, prg={len(prg['outputs'])}, inp_sizes={len(out_sizes)}"  # noqa: E501
@@ -45,6 +46,24 @@ class TextModelExport(unittest.TestCase):
     for i, exported_output in enumerate(prg["outputs"]):
       assert outputs[i].dtype.name == exported_output["dtype"], f"Model and exported output dtype don't match: mdl={outputs[i].dtype.name}, prg={exported_output['dtype']}"  # noqa: E501
 
+@unittest.skipUnless(Device.DEFAULT == "WEBGPU", "Testing WebGPU specific model export behavior")
+class TextModelExportWebGPU(unittest.TestCase):
+  def test_exported_input_output_dtypes(self):
+    class MyModel:
+      def forward(self, *inputs): return tuple([(inp+2).cast(inp.dtype) for inp in inputs])
+    model = MyModel()
+    # [:-1] because "ulong" and "long" is not supported
+    inputs = [Tensor.randn(2, dtype=dt) for dt in dtypes.uints[:-1] + dtypes.sints[:-1] + (dtypes.bool, dtypes.float)]
+    prg, _, _, _ = export_model(model, "webgpu", *inputs)
+    expected_buffer_types = ["Uint"]*len(dtypes.uints[:-1]) + ["Int"]*len(dtypes.sints[:-1]) + ["Int", "Float"]
+    for i, expected_buffer_type in enumerate(expected_buffer_types):
+      dt = inputs[i].dtype
+      expected_arr_prefix = f"{expected_buffer_type}{dt.itemsize*8}"
+      # test input buffers
+      self.assertIn(f"new {expected_arr_prefix}Array(gpuWriteBuffer{i}.getMappedRange()).set(_input{i});", prg)
+      # test output buffers
+      self.assertIn(f"const resultBuffer{i} = new {expected_arr_prefix}Array(gpuReadBuffer{i}.size/{dt.itemsize});", prg)
+      self.assertIn(f"resultBuffer{i}.set(new {expected_arr_prefix}Array(gpuReadBuffer{i}.getMappedRange()));", prg)
 
 if __name__ == '__main__':
   unittest.main()

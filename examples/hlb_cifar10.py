@@ -6,13 +6,14 @@
 import random, time
 import numpy as np
 from typing import Optional
-from extra.datasets import fetch_cifar, cifar_mean, cifar_std
 from extra.lr_scheduler import OneCycleLR
 from tinygrad import nn, dtypes, Tensor, Device, GlobalCounters, TinyJit
 from tinygrad.nn.state import get_state_dict, get_parameters
 from tinygrad.nn import optim
 from tinygrad.helpers import Context, BEAM, WINO, getenv, colored, prod
-from tinygrad.features.multi import MultiLazyBuffer
+
+cifar_mean = [0.4913997551666284, 0.48215855929893703, 0.4465309133731618]
+cifar_std = [0.24703225141799082, 0.24348516474564, 0.26158783926049628]
 
 BS, STEPS = getenv("BS", 512), getenv("STEPS", 1000)
 EVAL_BS = getenv("EVAL_BS", BS)
@@ -25,15 +26,14 @@ class UnsyncedBatchNorm:
     self.eps, self.track_running_stats, self.momentum = eps, track_running_stats, momentum
     self.num_devices = num_devices
 
-    if affine: self.weight, self.bias = Tensor.ones(sz), Tensor.zeros(sz)
+    if affine: self.weight, self.bias = Tensor.ones(sz, dtype=dtypes.float32), Tensor.zeros(sz, dtype=dtypes.float32)
     else: self.weight, self.bias = None, None
 
-    self.running_mean, self.running_var = Tensor.zeros(num_devices, sz, requires_grad=False), Tensor.ones(num_devices, sz, requires_grad=False)
-    self.num_batches_tracked = Tensor.zeros(1, requires_grad=False)
+    self.running_mean = Tensor.zeros(num_devices, sz, dtype=dtypes.float32, requires_grad=False)
+    self.running_var = Tensor.ones(num_devices, sz, dtype=dtypes.float32, requires_grad=False)
+    self.num_batches_tracked = Tensor.zeros(1, dtype=dtypes.int, requires_grad=False)
 
   def __call__(self, x:Tensor):
-    if isinstance(x.lazydata, MultiLazyBuffer): assert x.lazydata.axis is None or x.lazydata.axis == 0 and len(x.lazydata.lbs) == self.num_devices
-
     xr = x.reshape(self.num_devices, -1, *x.shape[1:]).cast(dtypes.float32)
     batch_mean, batch_invstd = self.calc_stats(xr)
     ret = xr.batchnorm(
@@ -48,7 +48,7 @@ class UnsyncedBatchNorm:
       # https://github.com/pytorch/pytorch/blob/c618dc13d2aa23625cb0d7ada694137532a4fa33/aten/src/ATen/native/cuda/Normalization.cuh
       # There's "online" algorithms that fix this, like https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_Online_algorithm
       batch_mean = x.mean(axis=(1,3,4))
-      y = (x - batch_mean.reshape(shape=[batch_mean.shape[0], 1, -1, 1, 1]))
+      y = (x - batch_mean.detach().reshape(shape=[batch_mean.shape[0], 1, -1, 1, 1]))  # d(var)/d(mean) = 0
       batch_var = (y*y).mean(axis=(1,3,4))
       batch_invstd = batch_var.add(self.eps).pow(-0.5)
 
@@ -111,7 +111,7 @@ class SpeedyResNet:
   def __call__(self, x, training=True):
     # pad to 32x32 because whitening conv creates 31x31 images that are awfully slow to compute with
     # TODO: remove the pad but instead let the kernel optimize itself
-    forward = lambda x: x.conv2d(self.whitening).pad2d((1,0,0,1)).sequential(self.net)
+    forward = lambda x: x.conv2d(self.whitening).pad((1,0,0,1)).sequential(self.net)
     return forward(x) if training else (forward(x) + forward(x[..., ::-1])) / 2.
 
 # hyper-parameters were exactly the same as the original repo
@@ -251,7 +251,7 @@ def train_cifar():
       if not is_train: break
 
   transform = [
-    lambda x: x / 255.0,
+    lambda x: x.float() / 255.0,
     lambda x: x.reshape((-1,3,32,32)) - Tensor(cifar_mean, device=x.device, dtype=x.dtype).reshape((1,3,1,1)),
     lambda x: x / Tensor(cifar_std, device=x.device, dtype=x.dtype).reshape((1,3,1,1)),
   ]
@@ -276,10 +276,7 @@ def train_cifar():
 
   set_seed(getenv('SEED', hyp['seed']))
 
-  X_train, Y_train, X_test, Y_test = fetch_cifar()
-  # load data and label into GPU and convert to dtype accordingly
-  X_train, X_test = X_train.to(device=Device.DEFAULT).float(), X_test.to(device=Device.DEFAULT).float()
-  Y_train, Y_test = Y_train.to(device=Device.DEFAULT), Y_test.to(device=Device.DEFAULT)
+  X_train, Y_train, X_test, Y_test = nn.datasets.cifar()
   # one-hot encode labels
   Y_train, Y_test = Y_train.one_hot(10), Y_test.one_hot(10)
   # preprocess data
@@ -333,12 +330,9 @@ def train_cifar():
 
     if not getenv("DISABLE_BACKWARD"):
       # index 0 for bias and 1 for non-bias
-      optimizer[0].zero_grad()
-      optimizer[1].zero_grad()
+      optimizer.zero_grad()
       loss.backward()
-
-      optimizer[0].step()
-      optimizer[1].step()
+      optimizer.step()
       lr_scheduler[0].step()
       lr_scheduler[1].step()
     return loss.realize()
@@ -407,7 +401,7 @@ def train_cifar():
         Y.shard_(GPUS, axis=0)
 
       with Context(BEAM=getenv("LATEBEAM", BEAM.value), WINO=getenv("LATEWINO", WINO.value)):
-        loss = train_step_jitted(model, [opt_bias, opt_non_bias], [lr_sched_bias, lr_sched_non_bias], X, Y)
+        loss = train_step_jitted(model, optim.OptimizerGroup(opt_bias, opt_non_bias), [lr_sched_bias, lr_sched_non_bias], X, Y)
         et = time.monotonic()
         loss_cpu = loss.numpy()
       # EMA for network weights

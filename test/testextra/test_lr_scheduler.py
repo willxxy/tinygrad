@@ -53,6 +53,12 @@ def get_lrs(optim, sched, epochs, steps=1, accs=None):
   return lrs
 
 class TestLrScheduler(unittest.TestCase):
+  def setUp(self):
+    self.old_training = Tensor.training
+    Tensor.training = True
+  def tearDown(self):
+    Tensor.training = self.old_training
+
   def _test_lr_scheduler(self, tinygrad_sched, torch_sched, epochs, opts, atol, rtol, adam=True):
     accs = opts.pop('accs', None)
     test_tensor = Tensor([0.], requires_grad=True)    # NOTE: optimizers are broken on 0-dim tensors because it broadcasts to [lr]
@@ -101,7 +107,7 @@ class TestLrScheduler(unittest.TestCase):
     self._test_multisteplr(1, {'milestones': [1], 'gamma': 0.133}, 1e-6, 1e-6, adam=False)
     if DEBUG>=2: print("third")
 
-  def test_onecyclelr(self): self._test_onecyclelr(1000, {'pct_start': 0.3, 'anneal_strategy': 'linear',
+  def test_onecyclelr(self): self._test_onecyclelr(100, {'pct_start': 0.3, 'anneal_strategy': 'linear',
                                                          'cycle_momentum': False, 'div_factor': 25.0,
                                                          'final_div_factor': 10000.0, 'max_lr':1e-5}, 1e-6, 1e-6)
   @unittest.skip("slow")

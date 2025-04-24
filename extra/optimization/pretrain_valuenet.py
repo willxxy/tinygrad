@@ -1,4 +1,4 @@
-from tinygrad.codegen.linearizer import Linearizer
+from tinygrad.codegen.kernel import Kernel
 from tqdm import tqdm, trange
 import math
 import random
@@ -12,7 +12,7 @@ from tinygrad.ops import LazyOp, TernaryOps, BinaryOps, UnaryOps, ReduceOps, Buf
 from tinygrad.dtype import dtypes
 from tinygrad.shape.shapetracker import ShapeTracker
 from tinygrad.shape.view import View
-from tinygrad.shape.symbolic import Variable
+from tinygrad.ops import Variable
 inf, nan = float('inf'), float('nan')
 from tinygrad.codegen.kernel import Opt, OptOps
 
@@ -45,7 +45,7 @@ if __name__ == "__main__":
   X,Y = [], []
   for i,x in enumerate(tqdm(dset)):
     ast, opts, tms = eval(x)
-    lin = Linearizer(ast)
+    lin = Kernel(ast)
     for o in opts: lin.apply_opt(o)
     if lin.shape_len >= MAX_DIMS: continue
     if min(tms) == float('inf'): continue
