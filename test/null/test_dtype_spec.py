@@ -25,24 +25,24 @@ class TestHelpers(unittest.TestCase):
   uints = (dtypes.uint8, dtypes.uint16, dtypes.uint32, dtypes.uint64)
   floats = (dtypes.float16, dtypes.float32, dtypes.float64)
 
-  @given(strat.sampled_from(signed_ints+uints), strat.integers(min_value=1, max_value=8))
-  def test_is_int(self, dtype, amt):
-    assert dtypes.is_int(dtype.vec(amt) if amt > 1 else dtype)
-    assert not dtypes.is_float(dtype.vec(amt) if amt > 1 else dtype)
+  @given(strat.sampled_from(signed_ints+uints))
+  def test_is_int(self, dtype):
+    assert dtypes.is_int(dtype)
+    assert not dtypes.is_float(dtype)
 
-  @given(strat.sampled_from(uints), strat.integers(min_value=1, max_value=8))
-  def test_is_unsigned_uints(self, dtype, amt):
-    assert dtypes.is_unsigned(dtype.vec(amt) if amt > 1 else dtype)
+  @given(strat.sampled_from(uints))
+  def test_is_unsigned_uints(self, dtype):
+    assert dtypes.is_unsigned(dtype)
 
-  @given(strat.sampled_from(signed_ints), strat.integers(min_value=1, max_value=8))
-  def test_is_unsigned_signed_ints(self, dtype, amt):
-    assert not dtypes.is_unsigned(dtype.vec(amt) if amt > 1 else dtype)
+  @given(strat.sampled_from(signed_ints))
+  def test_is_unsigned_signed_ints(self, dtype):
+    assert not dtypes.is_unsigned(dtype)
 
-  @given(strat.sampled_from(floats), strat.integers(min_value=1, max_value=8))
-  def test_is_float(self, dtype, amt):
-    assert dtypes.is_float(dtype.vec(amt) if amt > 1 else dtype)
-    assert not dtypes.is_int(dtype.vec(amt) if amt > 1 else dtype)
-    assert not dtypes.is_unsigned(dtype.vec(amt) if amt > 1 else dtype)
+  @given(strat.sampled_from(floats))
+  def test_is_float(self, dtype):
+    assert dtypes.is_float(dtype)
+    assert not dtypes.is_int(dtype)
+    assert not dtypes.is_unsigned(dtype)
 
   def test_bf16_is_float(self):
     assert dtypes.is_float(dtypes.bfloat16)
@@ -51,9 +51,9 @@ class TestHelpers(unittest.TestCase):
     assert dtypes.is_float(dtypes.fp8e4m3)
     assert dtypes.is_float(dtypes.fp8e5m2)
 
-  @given(strat.sampled_from([d for d in DTYPES_DICT.values() if dtypes.is_float(d) or dtypes.is_int(d)]), strat.integers(min_value=2, max_value=8))
-  def test_scalar(self, dtype, amt):
-    assert dtype.vec(amt).scalar() == dtype
+  @given(strat.sampled_from([d for d in DTYPES_DICT.values() if dtypes.is_float(d) or dtypes.is_int(d)]))
+  def test_scalar(self, dtype):
+    assert dtype.scalar() == dtype
 
   def test_from_py(self):
     assert dtypes.from_py(True) == dtypes.bool
@@ -93,8 +93,8 @@ class TestHelpers(unittest.TestCase):
 
   def test_dtype_range_vec(self):
     for dt in core_dtypes:
-      self.assertEqual(dt.min, dt.vec(4).min)
-      self.assertEqual(dt.max, dt.vec(4).max)
+      self.assertEqual(dt.min, dt.min)
+      self.assertEqual(dt.max, dt.max)
 
   def test_float_to_fp16(self):
     self.assertEqual(float_to_fp16(1), 1)
@@ -238,6 +238,22 @@ class TestTypePromotion(unittest.TestCase):
     assert least_upper_dtype(dtypes.weakint, dtypes.float16) == dtypes.float16
     assert least_upper_dtype(dtypes.weakint, dtypes.float32) == dtypes.float32
     assert least_upper_dtype(dtypes.weakint, dtypes.float64) == dtypes.float64
+
+  def test_weakfloat_promo(self):
+    # weakfloat is a float, but like weakint it is not one of dtypes.floats
+    assert dtypes.is_float(dtypes.weakfloat) and dtypes.weakfloat not in dtypes.floats
+    # weakfloat with itself is weakfloat
+    assert least_upper_dtype(dtypes.weakfloat, dtypes.weakfloat) == dtypes.weakfloat
+    # weakfloat is above bool, weakint and any concrete int (they defer up to it)
+    assert least_upper_dtype(dtypes.weakfloat, dtypes.bool) == dtypes.weakfloat
+    assert least_upper_dtype(dtypes.weakfloat, dtypes.weakint) == dtypes.weakfloat
+    assert least_upper_dtype(dtypes.weakfloat, dtypes.int32) == dtypes.weakfloat
+    assert least_upper_dtype(dtypes.weakfloat, dtypes.uint64) == dtypes.weakfloat
+    # weakfloat defers to any concrete float type
+    assert least_upper_dtype(dtypes.weakfloat, dtypes.fp8e4m3) == dtypes.fp8e4m3
+    assert least_upper_dtype(dtypes.weakfloat, dtypes.float16) == dtypes.float16
+    assert least_upper_dtype(dtypes.weakfloat, dtypes.float32) == dtypes.float32
+    assert least_upper_dtype(dtypes.weakfloat, dtypes.float64) == dtypes.float64
 
 class TestTypeSpec(unittest.TestCase):
   def setUp(self):

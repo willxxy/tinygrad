@@ -393,6 +393,7 @@ def db_connection():
     # another connection has set it already or is in the process of setting it
     # that connection will lock the database
     with contextlib.suppress(sqlite3.OperationalError): _db_connection.execute("PRAGMA journal_mode=WAL").fetchone()
+    _db_connection.execute("PRAGMA synchronous=NORMAL")
     if DEBUG >= 8: _db_connection.set_trace_callback(print)
   return _db_connection
 
@@ -571,6 +572,8 @@ class tqdm(Generic[T]):
 def trange(n:int, **kwargs) -> tqdm[int]: return tqdm(range(n), total=n, **kwargs)
 
 class disable_gc(contextlib.ContextDecorator):
+  # ContextDecorator otherwise reuses self, so recursive calls overwrite _was_enabled.
+  def _recreate_cm(self): return type(self)()
   def __enter__(self):
     self._was_enabled = gc.isenabled()
     if self._was_enabled: gc.disable()

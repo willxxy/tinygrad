@@ -27,8 +27,6 @@ class InvalidType:
     if cls._instance is None: cls._instance = object.__new__(cls)
     return cls._instance
   def __eq__(self, other): return self is other
-  def __lt__(self, other): return self is not other
-  def __gt__(self, other): return self is not other
   def __hash__(self): return id(self)
   def __repr__(self): return "Invalid"
   def __reduce__(self): return (InvalidType, ())  # unpickle returns the singleton
@@ -60,33 +58,24 @@ class DType(metaclass=DTypeMetaClass):
   bitsize: int
   name: str
   fmt: FmtStr|None
-  count: int
-  _scalar: DType|None
   @property
   def itemsize(self) -> int: return (self.bitsize + 7) // 8
   @staticmethod
-  def new(priority:int, bitsize:int, name:str, fmt:FmtStr|None): return DType(priority, bitsize, name, fmt, 1, None)
+  def new(priority:int, bitsize:int, name:str, fmt:FmtStr|None): return DType(priority, bitsize, name, fmt)
   def __reduce__(self): return type(self), tuple(getattr(self, f.name) for f in fields(self))
-  def __repr__(self): return f"dtypes.{INVERSE_DTYPES_DICT[self.scalar().name]}"+(f".vec({self.count})" if self.count != 1 else "")
-  def __lt__(self, o:DType): return (self.priority, self.bitsize, self.name, self.fmt, self.count) < (o.priority, o.bitsize, o.name, o.fmt, o.count)
-  @functools.cache  # pylint: disable=method-cache-max-size-none
-  def vec(self, sz:int) -> DType:
-    assert self.count == 1, f"can't vectorize {self} with size {sz}"
-    if sz == 1 or self == dtypes.void: return self  # void doesn't vectorize, and sz=1 is scalar
-    return DType(self.priority, self.bitsize*sz, f"{INVERSE_DTYPES_DICT[self.name]}{sz}", None, sz, self)
-  def scalar(self) -> DType: return self._scalar if self._scalar is not None else self
+  def __repr__(self): return f"dtypes.{INVERSE_DTYPES_DICT[self.name]}"
+  def __lt__(self, o:DType): return (self.priority, self.bitsize, self.name, self.fmt) < (o.priority, o.bitsize, o.name, o.fmt)
+  def scalar(self) -> DType: return self
   @functools.cached_property
   def min(self):
-    if dtypes.is_int(self): return 0 if dtypes.is_unsigned(self) else -2**(self.scalar().bitsize-1)
+    if dtypes.is_int(self): return 0 if dtypes.is_unsigned(self) else -2**(self.bitsize-1)
     return -float("inf") if dtypes.is_float(self) else False
   @functools.cached_property
   def max(self):
-    if dtypes.is_int(self): return 2**(self.scalar().bitsize)-1+self.min
+    if dtypes.is_int(self): return 2**(self.bitsize)-1+self.min
     return float("inf") if dtypes.is_float(self) else True
   def const(self, val: tuple[ConstType, ...]|ConstType):
-    if isinstance(val, tuple):
-      assert len(val) == self.count, f"mismatch {val} {self}"
-      return tuple(map(self.const, val))
+    if isinstance(val, tuple): return tuple(map(self.const, val))
     if isinstance(val, InvalidType): return val
     # NOTE: float('nan') != float('nan'), so we canonicalize here
     if isinstance(val, float) and math.isnan(val): val = math.nan
@@ -97,15 +86,15 @@ class DType(metaclass=DTypeMetaClass):
 class dtypes:
   @staticmethod
   @functools.cache
-  def is_float(x: DType) -> bool: return x.scalar() in dtypes.floats
+  def is_float(x: DType) -> bool: return x in (dtypes.floats + (dtypes.weakfloat,))
   @staticmethod # static methods on top, or bool in the type info will refer to dtypes.bool
   @functools.cache
-  def is_int(x: DType) -> bool: return x.scalar() in (dtypes.ints + (dtypes.weakint, dtypes.index))
+  def is_int(x: DType) -> bool: return x in (dtypes.ints + (dtypes.weakint, dtypes.index))
   @staticmethod
   @functools.cache
-  def is_unsigned(x: DType) -> bool: return x.scalar() in dtypes.uints
+  def is_unsigned(x: DType) -> bool: return x in dtypes.uints
   @staticmethod
-  def is_bool(x: DType) -> bool: return x.scalar() == dtypes.bool
+  def is_bool(x: DType) -> bool: return x == dtypes.bool
   @staticmethod
   def from_py(x) -> DType:
     # NOTE: isinstance(True, int) is True, so bool must be checked before int
@@ -135,15 +124,16 @@ class dtypes:
   uint64: Final[DType] = DType.new(8, 64, "unsigned long", 'Q')
   _uint128: Final[DType] = DType.new(8, 128, "uint128", None)
   _uint256: Final[DType] = DType.new(8, 256, "uint256", None)
-  fp8e4m3: Final[DType] = DType.new(9, 8, "float8_e4m3", None)
-  fp8e5m2: Final[DType] = DType.new(10, 8, "float8_e5m2", None)
-  fp8e4m3fnuz: Final[DType] = DType.new(9, 8, "float8_e4m3fnuz", None)
-  fp8e5m2fnuz: Final[DType] = DType.new(10, 8, "float8_e5m2fnuz", None)
-  float16: Final[DType] = DType.new(11, 16, "half", 'e')
+  weakfloat: Final[DType] = DType.new(9, 800, "weakfloat", None)
+  fp8e4m3: Final[DType] = DType.new(10, 8, "float8_e4m3", None)
+  fp8e5m2: Final[DType] = DType.new(11, 8, "float8_e5m2", None)
+  fp8e4m3fnuz: Final[DType] = DType.new(10, 8, "float8_e4m3fnuz", None)
+  fp8e5m2fnuz: Final[DType] = DType.new(11, 8, "float8_e5m2fnuz", None)
+  float16: Final[DType] = DType.new(12, 16, "half", 'e')
   # bfloat16 has higher priority than float16, so least_upper_dtype(dtypes.int64, dtypes.uint64) = dtypes.float16
-  bfloat16: Final[DType] = DType.new(12, 16, "__bf16", None)
-  float32: Final[DType] = DType.new(13, 32, "float", 'f')
-  float64: Final[DType] = DType.new(14, 64, "double", 'd')
+  bfloat16: Final[DType] = DType.new(13, 16, "__bf16", None)
+  float32: Final[DType] = DType.new(14, 32, "float", 'f')
+  float64: Final[DType] = DType.new(15, 64, "double", 'd')
 
   # dtype aliases
   half = float16; float = float32; double = float64 # noqa: E702
@@ -178,7 +168,8 @@ def to_dtype(dtype:DTypeLike) -> DType: return dtype if isinstance(dtype, DType)
 promo_lattice = { dtypes.bool: [dtypes.weakint], dtypes.weakint: [dtypes.int8, dtypes.uint8],
   dtypes.int8: [dtypes.int16], dtypes.int16: [dtypes.int32], dtypes.int32: [dtypes.int64],
   dtypes.int64: [dtypes.uint64], dtypes.uint8: [dtypes.int16, dtypes.uint16], dtypes.uint16: [dtypes.int32, dtypes.uint32],
-  dtypes.uint32: [dtypes.int64, dtypes.uint64], dtypes.uint64: [dtypes.fp8e4m3, dtypes.fp8e5m2, dtypes.fp8e4m3fnuz, dtypes.fp8e5m2fnuz],
+  dtypes.uint32: [dtypes.int64, dtypes.uint64], dtypes.uint64: [dtypes.weakfloat],
+  dtypes.weakfloat: [dtypes.fp8e4m3, dtypes.fp8e5m2, dtypes.fp8e4m3fnuz, dtypes.fp8e5m2fnuz],
   dtypes.fp8e4m3: [dtypes.float16, dtypes.bfloat16], dtypes.fp8e5m2: [dtypes.float16, dtypes.bfloat16],
   dtypes.fp8e4m3fnuz: [dtypes.float16, dtypes.bfloat16], dtypes.fp8e5m2fnuz: [dtypes.float16, dtypes.bfloat16],
   dtypes.float16: [dtypes.float32], dtypes.bfloat16: [dtypes.float32], dtypes.float32: [dtypes.float64], }
@@ -188,11 +179,11 @@ def _get_recursive_parents(dtype:DType) -> set[DType]:
   return set.union(*[_get_recursive_parents(d) for d in promo_lattice[dtype]], {dtype}) if dtype != dtypes.float64 else {dtypes.float64}
 @functools.cache
 def least_upper_dtype(*ds:DType) -> DType:
-  return min(set.intersection(*[_get_recursive_parents(d.scalar()) for d in ds]))
+  return min(set.intersection(*[_get_recursive_parents(d) for d in ds]))
 def least_upper_float(dt:DType) -> DType: return dt if dtypes.is_float(dt) else least_upper_dtype(dt, dtypes.default_float)
 
-DTYPES_DICT = {k: v for k, v in dtypes.__dict__.items() if isinstance(v, DType) and not k.startswith(("default", "void", "weakint", "index", "_"))}
-INVERSE_DTYPES_DICT = {**{v.name:k for k,v in DTYPES_DICT.items()}, "void": "void", "weakint":"weakint", "index":"index"}
+DTYPES_DICT = {k: v for k, v in dtypes.__dict__.items() if isinstance(v, DType) and not k.startswith(("default", "void", "weak", "index", "_"))}
+INVERSE_DTYPES_DICT = {**{v.name:k for k,v in DTYPES_DICT.items()}, "void": "void", "weakint":"weakint", "index":"index", "weakfloat":"weakfloat"}
 
 @functools.cache
 def can_lossless_cast(dt0:DType, dt1:DType) -> bool:
