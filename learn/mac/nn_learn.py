@@ -27,6 +27,7 @@ class TinyNet:
         loss = self(X_train[samples]).sparse_categorical_crossentropy(Y_train[samples]).backward()
         return loss.realize(*optimizer.schedule_step())
 
+    @TinyJit
     def get_test_acc(self, X_test: Tensor, Y_test: Tensor) -> Tensor:
         return (self(X_test).argmax(axis=1) == Y_test).mean() * 100
 
